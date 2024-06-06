@@ -1,0 +1,71 @@
+---
+title: "project_eda"
+author: "lisa liubovich"
+date: "2024-06-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+```
+```{r load in data}
+inst <- read_csv("./institutions.csv")
+View(inst)
+```
+
+```{r get rid of NA columns}
+inst <- inst %>% 
+  select(-CHANGEC1, -CHANGEC2, -CHANGEC3, -CHANGEC4, -CHANGEC5, -CHANGEC6, -CHANGEC7, -CHANGEC8, -CHANGEC9, -CHANGEC10, -CHANGEC11, -CHANGEC12, -CHANGEC13, -CHANGEC14, -CHANGEC15, -CMSA, -INSAGNT2)
+
+
+```
+```{r cleaning data}
+inst_clean <- inst %>% 
+  select(ASSET, BKCLASS, DEP, DEPDOM, EQ, MUTUAL, NETINC, ROA, ROAPTX, ROAPTXQ, ROAQ, ROE, STNAME, TRUST) %>% 
+  filter(!if_any(everything(), is.na))
+
+inst_clean
+```
+
+
+```{r split data}
+set.seed(12345)  
+training_pct <- 0.8
+Z <- sample(nrow(inst_clean), floor(training_pct*nrow(inst_clean)))
+inst.training <- inst_clean[Z, ]
+inst.testing <- inst_clean[-Z, ]
+c(nrow(inst_clean), nrow(inst.training), nrow(inst.testing))
+```
+
+
+# EDA
+
+```{r pairs plot}
+inst.training1 <- inst.training %>% 
+  select(-STNAME)
+
+ggpairs(inst.training1[, c('ASSET', 'BKCLASS', 'DEP', 'DEPDOM', 'EQ', 'MUTUAL', 'NETINC')])
+
+ggpairs(inst.training1[, c('ROA', 'ROAPTX', 'ROAPTXQ', 'ROAQ', 'ROE', 'TRUST')])
+```
+- Highly correlated variables: (DEP, DEPDOM, EQ, and NETINC with ASSET), (DEPDOM, EQ, and NETIC with DEP), (EQ and NETINC with DEPDOM), (EQ with NETINC), (ROAPTX, ROAPTX, ROAQ, with ROA), (ROAPTXQ and ROAQ with ROAPTX), (ROAQ with ROAPTX)
+
+lots of highly correlated variables, ROE, MUTUAL, TRUST are not highly correlated with other variables
+
+```{r removing irrelevant variables}
+inst.training <- inst.training %>% 
+  select(-MUTUAL, -ROE, -TRUST)
+
+inst.testing <- inst.testing %>% 
+  select(-MUTUAL, -ROE, -TRUST)
+```
+
+
+As of right now, the variables we intend on using are: ASSET, BKCLASS, DEP, DEPDOM, EQ, NETINC, ROA, ROAPTX, ROAPTXQ, ROAQ, and STNAME. 
+
