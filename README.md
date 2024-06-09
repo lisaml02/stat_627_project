@@ -19,6 +19,8 @@ Choose a real-world data set from the following or other approved sources (do no
 - Government data: Data.gov (search phrase example: "racial profiling")
 - US Bureau of Justice Statistics: BJS
 
+- Link to data used for this project [FDIC Bank Health Data](https://www.fdic.gov/resources/tools/bank-data-guide/data-download.html)
+
 #### Data Set Criteria
 - Minimum sample size of 500 (after cleaning missing values)
 - At least 8 variables of interest
