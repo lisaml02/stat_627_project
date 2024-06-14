@@ -1,0 +1,150 @@
+---
+title: "Model Fitting - KNN"
+author: "Silvy S"
+format: pdf
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+## Libraries & Data 
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+library(class)
+library(caret)
+library(ISLR2)
+
+```
+
+```{r}
+
+inst <- read_csv("inst_clean.csv")
+str(inst)
+
+```
+
+## Data Partitioning 
+
+```{r}
+
+set.seed(12345)  
+training_pct <- 0.8
+Z <- sample(nrow(inst), floor(training_pct*nrow(inst)))
+inst.training <- inst[Z, ]
+inst.testing <- inst[-Z, ]
+c(nrow(inst), nrow(inst.training), nrow(inst.testing))
+```
+
+## Model Fitting  - KNN *(Asset)*
+
+#### - Ordinal Encoding - BKCLASS variable
+
+-   Missing values check
+
+```{r}
+
+bkclass.levels <- unique(inst$BKCLASS)
+bkclass.map <- setNames(as.integer(bkclass.levels), bkclass.levels)
+inst.training$BKCLASS <- as.integer(bkclass.map[inst.training$BKCLASS])
+inst.testing$BKCLASS <- as.integer(bkclass.map[inst.testing$BKCLASS])
+
+inst.training[is.na(inst.training)] <- 0
+inst.testing[is.na(inst.testing)] <- 0
+```
+
+#### - Select Predictors
+
+```{r}
+# Select predictors and response variable for training set
+X.train <- inst.training[, c("BKCLASS", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.train <- inst.training$ASSET
+
+# Select predictors and response variable for testing set
+X.test <- inst.testing[, c("BKCLASS", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.test <- inst.testing$ASSET
+```
+
+#### - Fit the KNN Model
+
+-   had to convert y.test to numeric,
+
+-   calculated MSE
+
+```{r}
+
+k <- 3
+asset.knn <- knn(train=X.train, test=X.test, cl=Y.train, k)
+
+Y.test <- as.numeric(as.character(Y.test))
+asset.knn <- as.numeric(as.character(asset.knn))
+
+
+mse <- mean((Y.test - asset.knn)^2)
+print(paste("Mean Squared Error (MSE):", mse))
+
+
+mae <- mean(abs(Y.test - asset.knn))
+print(paste("Mean Absolute Error (MAE):", mae))
+
+
+```
+
+## KNN Model 2 - BKCLASS
+
+```{r}
+
+set.seed(12345)  
+training_pct <- 0.8
+Z <- sample(nrow(inst), floor(training_pct*nrow(inst)))
+inst.training <- inst[Z, ]
+inst.testing <- inst[-Z, ]
+c(nrow(inst), nrow(inst.training), nrow(inst.testing))
+
+```
+
+```{r}
+
+bkclass.levels <- unique(inst$BKCLASS)
+bkclass.map <- setNames(as.integer(bkclass.levels), bkclass.levels)
+inst.training$BKCLASS <- as.integer(bkclass.map[inst.training$BKCLASS])
+inst.testing$BKCLASS <- as.integer(bkclass.map[inst.testing$BKCLASS])
+
+inst.training[is.na(inst.training)] <- 0
+inst.testing[is.na(inst.testing)] <- 0
+```
+
+```{r}
+
+
+inst.training <- na.omit(inst.training)
+inst.testing <- na.omit(inst.testing)
+
+
+X.train <- inst.training[, c("ASSET", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.train <- inst.training$BKCLASS
+
+
+X.test <- inst.testing[, c("ASSET", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.test <- inst.testing$BKCLASS
+
+
+k <- 3
+bkclass.knn <- knn(train=X.train, test=X.test, cl=Y.train, k)
+
+
+table(Y.test, bkclass.knn)
+
+mean(Y.test == bkclass.knn)
+
+```
+
+-   Handled missing values & N/A
+
+-   Select predictors
+
+-   Fit KNN
+
+-   Confusion Matrix and Classification rate on test
