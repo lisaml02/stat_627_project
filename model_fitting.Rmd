@@ -138,7 +138,10 @@ commercial_bank_categories <- c("N", "NM", "SM", "NC")
 # Create binary variable
 inst.training$CommercialBank <- ifelse(inst.training$BKCLASS %in% commercial_bank_categories, 1, 0)
 print(inst.training)
+
+
 ```
+
 
 ```{r fitting a logistic model}
 # predicting whether or not the bank is a commericial bank or not
@@ -258,6 +261,8 @@ inst.training[is.na(inst.training)] <- 0
 inst.testing[is.na(inst.testing)] <- 0
 ```
 
+
+
 #### - Select Predictors
 
 ```{r}
@@ -279,6 +284,7 @@ Y.test <- inst.testing$ASSET
 ```{r}
 library(class)
 library(caret)
+
 k <- 3
 asset.knn <- knn(train=X.train, test=X.test, cl=Y.train, k)
 
@@ -295,6 +301,8 @@ print(paste("Mean Absolute Error (MAE):", mae))
 
 
 ```
+
+
 
 ## KNN Model 2 - BKCLASS
 
@@ -332,7 +340,11 @@ print(table(inst.training$BKCLASS))
 inst.training[is.na(inst.training)] <- 0
 inst.testing[is.na(inst.testing)] <- 0
 
+
 ```
+
+
+
 
 ```{r}
 
@@ -351,7 +363,7 @@ X.test <- inst.testing[, c("ASSET", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "
 Y.test <- inst.testing$BKCLASS
 
 
-k <- 3
+k <- 7
 bkclass.knn <- class::knn(train=X.train, test=X.test, cl=Y.train, k)
 
 

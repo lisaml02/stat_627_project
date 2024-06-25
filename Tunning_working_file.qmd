@@ -1,0 +1,225 @@
+---
+title: "Model Tuning - KNN"
+author: "Silvy S."
+format: pdf
+editor: visual
+---
+
+```{r}
+
+library(tidyverse)
+library(ggplot2)
+library(car)
+
+inst_clean <- read_csv("./inst_clean.csv")
+
+set.seed(12345)  
+training_pct <- 0.8
+Z <- sample(nrow(inst_clean), floor(training_pct*nrow(inst_clean)))
+inst.training <- inst_clean[Z, ]
+inst.testing <- inst_clean[-Z, ]
+c(nrow(inst_clean), nrow(inst.training), nrow(inst.testing))
+```
+
+Binary
+
+```{r}
+
+commercial_bank_categories <- c("N", "NM", "SM", "NC")
+
+# Create binary variable
+inst.training$CommercialBank <- ifelse(inst.training$BKCLASS %in% commercial_bank_categories, 1, 0)
+print(inst.training)
+
+
+# Create binary variable
+inst.testing$CommercialBank <- ifelse(inst.testing$BKCLASS %in% commercial_bank_categories, 1, 0)
+print(inst.testing)
+```
+
+Ordinal encoding
+
+```{r}
+
+bkclass.levels <- unique(inst.training$BKCLASS)
+bkclass.map <- setNames(as.integer(bkclass.levels), bkclass.levels)
+inst.training$BKCLASS <- as.integer(bkclass.map[inst.training$BKCLASS])
+inst.testing$BKCLASS <- as.integer(bkclass.map[inst.testing$BKCLASS])
+
+inst.training[is.na(inst.training)] <- 0
+inst.testing[is.na(inst.testing)] <- 0
+
+```
+
+```{r}
+
+# Select predictors and response variable for training set
+X.train <- inst.training[, c("BKCLASS", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.train <- inst.training$ASSET
+
+# Select predictors and response variable for testing set
+X.test <- inst.testing[, c("BKCLASS", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.test <- inst.testing$ASSET
+```
+
+Fit KNN - Asset
+
+```{r}
+
+library(class)
+library(caret)
+
+k <- 3
+asset.knn <- knn(train=X.train, test=X.test, cl=Y.train, k)
+
+Y.test <- as.numeric(as.character(Y.test))
+asset.knn <- as.numeric(as.character(asset.knn))
+
+
+mse <- mean((Y.test - asset.knn)^2)
+print(paste("Mean Squared Error (MSE):", mse))
+
+
+mae <- mean(abs(Y.test - asset.knn))
+print(paste("Mean Absolute Error (MAE):", mae))
+
+```
+
+```{r}
+
+library(class)  # Make sure the class package is loaded for the knn function
+
+set.seed(12345)
+
+Kmax <- 25  # Set the largest K to consider for this study.
+mae <- rep(0, Kmax)  # Initialize MAE vector
+
+# Assuming X.train, X.test, Y.train, Y.test are already defined
+for (i in 1:Kmax) {
+  knn.out <- knn(train = X.train, test = X.test, cl = Y.train, k = i)
+  mae[i] <- mean(abs(as.numeric(as.character(Y.test)) - as.numeric(as.character(knn.out))))
+}
+
+
+# Find the K with the minimum MAE
+optimal_K <- which.min(mae)
+optimal_MAE <- mae[optimal_K]
+
+# Plot the MAE values
+plot(1:Kmax, mae, xlab = "K", ylab = "MAE", type = "b")
+abline(v = optimal_K, col = "red", lty = 2)  # Add a vertical line for the optimal K
+text(optimal_K, optimal_MAE, labels = paste("K =", optimal_K), pos = 4, col = "red")
+
+# Print the optimal K and its corresponding MAE
+cat("The optimal K is:", optimal_K, "with a minimum MAE of:", optimal_MAE, "\n")
+
+```
+
+-   Model produced the optimal K to be 3, with the lowest MAE. Set.seed for reproducibility.
+
+### KNN - BKCLASS 
+
+```{r}
+
+library(caret)
+library(class)
+
+inst.training <- na.omit(inst.training)
+inst.testing <- na.omit(inst.testing)
+
+
+X.train <- inst.training[, c("ASSET", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.train <- inst.training$CommercialBank
+
+
+X.test <- inst.testing[, c("ASSET", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.test <- inst.testing$CommercialBank
+
+
+k <- 5
+bkclass.knn <- class::knn(train=X.train, test=X.test, cl=Y.train, k)
+
+
+table(Y.test == bkclass.knn)
+
+mean(Y.test == bkclass.knn)
+```
+
+-   Model is over-fitting, may be due to high multicollinearity
+
+## Step-wise 
+
+-   to reduce predictors
+
+```{r}
+
+library(MASS)
+
+
+# Combine the training data into one data frame
+train_data <- inst.training
+
+# Fit a full model
+full_model <- glm(CommercialBank ~ ASSET + DEP + DEPDOM + EQ + NETINC + ROAPTX + ROAPTXQ + ROAQ, 
+                  data = train_data, family = binomial)
+
+# Apply stepwise selection
+stepwise_model <- stepAIC(full_model, direction = "both", trace = FALSE)
+
+# Summary of the stepwise-selected model
+summary(stepwise_model)
+
+```
+
+```{r}
+
+
+# Extract the names of the selected predictors
+selected_predictors <- names(coef(stepwise_model))[-1]  # Remove the intercept
+
+# Create new training and testing sets with selected predictors
+X.train_reduced <- inst.training[, selected_predictors]
+X.test_reduced <- inst.testing[, selected_predictors]
+Y.train <- inst.training$CommercialBank
+Y.test <- inst.testing$CommercialBank
+
+# Ensure Y.train and Y.test are factors
+Y.train <- as.factor(Y.train)
+Y.test <- as.factor(Y.test)
+
+# Perform KNN classification with reduced predictors
+k <- 13
+bkclass.knn_reduced <- class::knn(train = X.train_reduced, test = X.test_reduced, cl = Y.train, k)
+
+# Evaluate the performance
+confusion_matrix_reduced <- table(Y.test, bkclass.knn_reduced)
+print(confusion_matrix_reduced)
+
+accuracy_reduced <- mean(Y.test == bkclass.knn_reduced)
+cat("Accuracy with reduced predictors: ", accuracy_reduced, "\n")
+
+```
+
+```{r}
+
+
+# Fit a full model with all predictors
+initial_full_model <- glm(CommercialBank ~ ASSET + DEP + DEPDOM + EQ + NETINC + ROAPTX + ROAPTXQ + ROAQ, 
+                          data = train_data, family = binomial)
+
+# Summary of the initial full model
+summary(initial_full_model)
+
+```
+
+```{r}
+# Apply stepwise selection
+stepwise_model <- stepAIC(initial_full_model, direction = "both", trace = FALSE)
+
+# Summary of the stepwise-selected model
+summary(stepwise_model)
+
+```
+
+```{}
+```

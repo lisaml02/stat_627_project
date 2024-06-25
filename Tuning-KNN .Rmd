@@ -1,0 +1,266 @@
+---
+title: "model_Tuning_KNN"
+author: "Silvy S."
+date: "2024-06-25"
+output: pdf_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# A bit more EDA...
+
+We have a high number of n relative to p.
+
+Let's test for multicollinearity:
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(car)
+
+inst_clean <- read_csv("./inst_clean.csv")
+
+# Create binary variable
+commercial_bank_categories <- c("N", "NM", "SM", "NC")
+inst_clean$CommercialBank <- ifelse(inst_clean$BKCLASS %in% commercial_bank_categories, 1, 0)
+print(inst_clean)
+
+## Splitting
+set.seed(12345)  
+training_pct <- 0.8
+Z <- sample(nrow(inst_clean), floor(training_pct*nrow(inst_clean)))
+inst.training <- inst_clean[Z, ]
+inst.testing <- inst_clean[-Z, ]
+c(nrow(inst_clean), nrow(inst.training), nrow(inst.testing))
+
+```
+
+
+```{r fitting full linear model}
+
+lm_full <- lm(ASSET ~ BKCLASS + DEP + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, 
+              data = inst_clean)
+summary(lm_full)
+
+vif(lm_full)
+```
+
+
+```{r reduced model}
+
+library(MASS)
+
+# Perform stepwise selection
+stepwise_model <- stepAIC(lm_full, direction = "both", trace = FALSE)
+
+# Display the summary of the final model
+summary(stepwise_model)
+
+vif(stepwise_model)
+```
+
+
+#### - Ordinal Encoding - BKCLASS variable
+
+-   Missing values check
+
+```{r}
+
+bkclass.levels <- unique(inst.training$BKCLASS)
+bkclass.map <- setNames(as.integer(bkclass.levels), bkclass.levels)
+inst.training$BKCLASS <- as.integer(bkclass.map[inst.training$BKCLASS])
+inst.testing$BKCLASS <- as.integer(bkclass.map[inst.testing$BKCLASS])
+
+inst.training[is.na(inst.training)] <- 0
+inst.testing[is.na(inst.testing)] <- 0
+```
+
+#### - Select Predictors from VIF test ~ predictors best for asset
+
+
+```{r}
+# Select predictors and response variable for training set
+X.train <- inst.training[, c("BKCLASS", "DEP", "DEPDOM", "EQ", "NETINC", "ROA")]
+Y.train <- inst.training$ASSET
+
+# Select predictors and response variable for testing set
+X.test <- inst.testing[, c("BKCLASS", "DEP", "DEPDOM", "EQ", "NETINC", "ROA")]
+Y.test <- inst.testing$ASSET
+```
+
+#### - Fit the KNN Model
+
+-   had to convert y.test to numeric,
+
+-   calculated MSE
+
+```{r}
+library(class)
+library(caret)
+set.seed(12345) 
+k <- 3
+Y.test <- as.numeric(as.character(Y.test))
+
+asset.knn <- knn(train=X.train, test=X.test, cl=Y.train, k)
+
+asset.knn <- as.numeric(as.character(asset.knn))
+
+
+mse <- mean((Y.test - asset.knn)^2)
+print(paste("Mean Squared Error (MSE):", mse))
+
+
+mae <- mean(abs(Y.test - asset.knn))
+print(paste("Mean Absolute Error (MAE):", mae))
+
+
+```
+
+
+## Tuning - tuned the model with optimal K 
+
+
+```{r}
+library(class)  # Make sure the class package is loaded for the knn function 
+set.seed(12345) 
+Kmax <- 25  # Set the largest K to consider for this study. 
+mae <- rep(0, Kmax)  # Initialize MAE vector 
+for (i in 1:Kmax) {   knn.out <- knn(train = X.train, test = X.test, cl = Y.train, k = i)   
+
+mae[i] <- mean(abs(as.numeric(as.character(Y.test)) - as.numeric(as.character(knn.out)))) } # Find the K with the minimum MAE 
+
+optimal_K <- which.min(mae) 
+optimal_MAE <- mae[optimal_K] # Plot the MAE values 
+plot(1:Kmax, mae, xlab = "K", ylab = "MAE", type = "b") 
+abline(v = optimal_K, col = "red", lty = 2)  # Add a vertical line for the optimal K 
+text(optimal_K, optimal_MAE, labels = paste("K =", optimal_K), pos = 4, col = "red") # Print the optimal K and its corresponding MAE 
+cat("The optimal K is:", optimal_K, "with a minimum MAE of:", optimal_MAE, "\n")
+```
+
+```{r}
+library(class)
+library(caret)
+set.seed(12345) 
+k <- 7
+Y.test <- as.numeric(as.character(Y.test))
+
+asset.knn <- knn(train=X.train, test=X.test, cl=Y.train, k)
+
+asset.knn <- as.numeric(as.character(asset.knn))
+
+
+mse <- mean((Y.test - asset.knn)^2)
+print(paste("Mean Squared Error (MSE):", mse))
+
+
+mae <- mean(abs(Y.test - asset.knn))
+print(paste("Mean Absolute Error (MAE):", mae))
+```
+
+
+
+
+
+## KNN Model 2 - BKCLASS
+
+
+```{r fitting a logistic model}
+# predicting whether or not the bank is a commercial bank or not
+
+logit_inst <- lm(CommercialBank ~ ASSET + DEP + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, data = inst.training, family = "binomial")
+summary(logit_inst)
+```
+
+
+```{r}
+# Perform stepwise selection
+stepwise_model_class <- stepAIC(logit_inst, direction = "both", trace = FALSE)
+
+# Display the summary of the final model
+summary(stepwise_model_class)
+
+vif(stepwise_model_class)
+```
+
+
+
+
+```{r}
+
+library(caret)
+library(class)
+
+inst.training <- na.omit(inst.training)
+inst.testing <- na.omit(inst.testing)
+
+
+X.train <- inst.training[, c("ASSET", "DEP","EQ", "NETINC", "ROA")]
+Y.train <- inst.training$CommercialBank
+
+
+X.test <- inst.testing[,c("ASSET", "DEP","EQ", "NETINC", "ROA")]
+Y.test <- inst.testing$CommercialBank
+
+
+k <- 5
+bkclass.knn <- class::knn(train=X.train, test=X.test, cl=Y.train, k)
+
+
+table(Y.test, bkclass.knn)
+
+mean(Y.test == bkclass.knn)
+
+```
+
+
+## Tuning 
+
+```{r}
+Kmax <- 25 # Set the largest K I would consider for this study.
+class.rate <- rep(0, Kmax)
+for (i in 1:Kmax) {
+knn.out <- knn(train=X.train, test=X.test, cl=Y.train, k = i)
+class.rate[i] <- mean(Y.test == knn.out)
+}
+plot(c(1:Kmax), class.rate, xlab="K", ylab="Correct classification rate")
+
+```
+
+```{r}
+k.opt <- which.max(class.rate)
+c(k.opt, class.rate[which.max(class.rate)]) # Optimal K
+```
+
+## Tuning- with optimal K 
+
+```{r}
+
+library(caret)
+library(class)
+
+inst.training <- na.omit(inst.training)
+inst.testing <- na.omit(inst.testing)
+
+
+X.train <- inst.training[, c("ASSET", "DEP","EQ", "NETINC", "ROA")]
+Y.train <- inst.training$CommercialBank
+
+
+X.test <- inst.testing[,c("ASSET", "DEP","EQ", "NETINC", "ROA")]
+Y.test <- inst.testing$CommercialBank
+
+
+k <- 13 # Optimal K
+bkclass.knn <- class::knn(train=X.train, test=X.test, cl=Y.train, k)
+
+
+table(Y.test, bkclass.knn)
+
+mean(Y.test == bkclass.knn)
+```
+
+
