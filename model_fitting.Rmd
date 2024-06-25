@@ -1,0 +1,364 @@
+---
+title: "model_fitting"
+author: "lisa liubovich"
+date: "2024-06-13"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# A bit more EDA...
+
+We have a high number of n relative to p.
+
+Let's test for multicollinearity:
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(car)
+
+inst_clean <- read_csv("./inst_clean.csv")
+
+set.seed(12345)  
+training_pct <- 0.8
+Z <- sample(nrow(inst_clean), floor(training_pct*nrow(inst_clean)))
+inst.training <- inst_clean[Z, ]
+inst.testing <- inst_clean[-Z, ]
+c(nrow(inst_clean), nrow(inst.training), nrow(inst.testing))
+```
+
+```{r VIF}
+lm_train <- lm(NETINC ~ ASSET + BKCLASS + DEP + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, data = inst.training)
+vif_values_train <- vif(lm_train)
+print(vif_values_train)
+
+lm_test <- lm(NETINC ~ ASSET + BKCLASS + DEP + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, data = inst.testing)
+vif_values_test <- vif(lm_test)
+print(vif_values_test)
+```
+
+Since a lot of our variables are correlated, we can use ridge regression.
+
+Silvy: KNN
+
+Ryan: linear and ridge regression
+
+Lisa: bootstrap and logistic
+
+# Method Selection
+
+The concept of the bias-variance trade-off has been central to our learning so far, so we really wanted that to be the focus of our project. As a result, we selected methods over a range of flexibility and restrictiveness as well as disadvantages/advantages that accompany certain methods regarding our ratio of n to p. Here is why we chose each model:
+
+1.  Linear Regression:
+
+    1.  advantages:
+
+        1.  low variance $\rightarrow$ simple model, makes it less sensitive to fluctuations in the training data
+
+        2.  interpret-ability is simple
+
+    2.  disadvantages:
+
+        1.  high bias: if the true relationship between predictors and response is not linear, linear regression will underfit the data
+
+        2.  the assumptions of linear regression (linearity, independence of errors, constant variance, and normally distributed errors) may not hold in practice
+
+2.  Logistic Regression:
+
+    1.  advantages:
+
+        1.  low variance for large samples $\rightarrow$ especially useful given how large our sample size is
+
+        2.  effective for binary outcomes,
+
+    2.  disadvantages:
+
+        1.  high bias (like linear reg)
+
+        2.  modeling limitations $\rightarrow$ may struggle with complex boundaries in the data, which may lead to underfitting
+
+3.  KNN
+
+    1.  advantages:
+
+        1.  low bias $\rightarrow$ KNN is nonparametric and can fit very complex decision boundaries
+
+        2.  flexibility $\rightarrow$ can model complex patterns in the data more accurately
+
+    2.  disadvantages:
+
+        1.  high variance $\rightarrow$ very sensitive to the specific training data and prone to over fitting when k is small
+
+        2.  computational cost is high for large datasets
+
+4.  ridge regression
+
+    1.  advantages
+
+        1.  penalty for large coefficients manages the bias-variance trade-off by reducing variance without significantly increasing bias
+
+        2.  handles multicollinearity, which is important in our data that very much suffers from multicollinearity
+
+    2.  disadvantages:
+
+        1.  moderate bias might lead to underfitting
+
+        2.  linear assumptions might also lead to bias if the true relationship is not linear
+
+5.  boostrap
+
+    1.  advantages:
+
+        1.  low variance estimates
+
+        2.  allows for better understanding and estimation of the bias and variance of model estimates $\rightarrow$ which helps in model selection and tuning
+
+    2.  disadvantages:
+
+        1.  no direct impact on bias or variance $\rightarrow$ helps assess these properties
+
+        2.  computationally complex, especially given our large dataset
+
+By using this specific set of methods, we can properly see the advantages and disadvantages of each particular method on our large dataset and which provides the most accurate and consistent predictions as a result.
+
+# Fitting a Logistic Regression
+
+We're gonna convert BKCLASS into a binary variable just for this specific equation.
+
+A classification code assigned by the FDIC based on the institution's charter type (commercial bank or savings institution), charter agent (state or federal), Federal Reserve membership status (Fed member, Fed non-member) and its primary federal regulator (state chartered institutions are subject to both federal and state supervision). **N** - Commercial bank, national (federal) charter, Fed member, and supervised by the Office of the Comptroller of the Currency (OCC); **NM** - Commercial bank, state charter, Fed non-member, and supervised by the Federal Deposit Insurance Corporation (FDIC); **OI** - Insured U.S. branch of a foreign chartered institution (IBA) and supervised by the OCC or FDIC; SB Federal savings banks, federal charter, supervised by the OCC or before July 21,2011 the Office of Thrift Supervision (OTS); **SI** - State chartered stock savings banks, supervised by the FDIC; **SL** - State chartered stock savings and loan associations, supervised by the FDIC or before July 21,2011 the OTS; **SM** - Commercial bank, state charter, Fed member, and supervised by the Federal Reserve Bank (FRB); **NC** Noninsured non-deposit commercial banks and/or trust companies regulated by the OCC, a state, or a territory; **NS** - Noninsured stock savings bank supervised by a state or territory; **CU** - state or federally chartered credit unions supervised by the National Credit Union Association (NCUA).
+
+Our binary variable will split these categories into two categories: commercial and non commericial
+
+```{r recoding BKCLASS}
+commercial_bank_categories <- c("N", "NM", "SM", "NC")
+
+# Create binary variable
+inst.training$CommercialBank <- ifelse(inst.training$BKCLASS %in% commercial_bank_categories, 1, 0)
+print(inst.training)
+```
+
+```{r fitting a logistic model}
+# predicting whether or not the bank is a commericial bank or not
+
+logit_inst <- glm(CommercialBank ~ ASSET + DEP + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, data = inst.training, family = "binomial")
+summary(logit_inst)
+```
+
+```{r feature selection with LASSO}
+library(MASS)
+library(glmnet)
+
+X <- model.matrix(logit_inst)[, -1]
+y <- as.numeric(inst.training$MUTUAL)
+
+dim(X)
+length(y)
+
+lasso_model <- cv.glmnet(X, y, family = "binomial", alpha = 1)
+print(lasso_model)
+
+# minimum lambda = 0.0000706. More tuning will be done next week.
+```
+
+# Fitting a linear regression with boostrap
+
+```{r fitting full linear model}
+lm_full <- lm(ASSET ~ BKCLASS + DEP + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, 
+              data = inst.training)
+summary(lm_full)
+```
+
+```{r bootstrap function}
+bootstrap_lm <- function(data, formula = NULL, model = NULL, B = 1000) {
+  if (!is.null(model)) {
+    formula <- formula(model)
+  }
+  
+  n <- nrow(data)
+  coefficients <- matrix(NA, ncol = length(coef(lm(formula, data = data))), nrow = B)
+  
+  for (i in 1:B) {
+
+    idx <- sample(1:n, replace = TRUE)
+    bootstrap_sample <- data[idx, ]
+    
+
+    model_bootstrap <- lm(formula, data = bootstrap_sample)
+    
+    coefficients[i, ] <- coef(model_bootstrap)
+  }
+  
+  return(coefficients)
+}
+```
+
+```{r applying boostrap}
+set.seed(123)  
+boot_results <- bootstrap_lm(inst.training, model = lm_full, B = 1000)
+
+head(boot_results)
+# will tune next week
+```
+
+# Fitting a Linear Model
+
+```{r fitting linear model}
+Assets_linear <- lm(ASSET ~ BKCLASS + DEP + DEPDOM + EQ + MUTUAL + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ + ROE + STNAME + TRUST, data = inst.training)
+# Equity_linear <- lm(EQ ~ ASSET + BKCLASS + DEP + DEPDOM + MUTUAL + NETINC + ROA + #ROAPTX + ROAPTXQ + ROAQ + ROE + STNAME + TRUST, data = inst.training)
+# ROA_linear <- lm(ROA ~ ASSET + BKCLASS + DEP + DEPDOM + EQ + MUTUAL + NETINC + # ROAPTX + ROAPTXQ + ROAQ + ROE + STNAME + TRUST, data = inst.training)
+# ROE_linear <- lm(ROE ~ ASSET + BKCLASS + DEP + DEPDOM + EQ + MUTUAL + NETINC + ROA + # ROAPTX + ROAPTXQ + ROAQ + STNAME + TRUST, data = inst.training)
+
+summary(Assets_linear)
+# summary(Equity_linear)
+# summary(ROA_linear)
+# summary(ROE_linear)
+```
+
+# Fitting a Ridge Regression Model
+
+```{r fitting ridge model}
+asset_x <- model.matrix(ASSET ~ .-1, data = inst.training)
+asset_y <- inst.training$ASSET
+Assets_ridge <- glmnet(asset_x, asset_y, alpha = 0, lambda = 0.1)
+print(coef(Assets_ridge))
+
+# equity_x <- model.matrix(EQ ~ .-1, data = inst.training)
+# equity_y <- inst.training$EQ
+# Equity_ridge <- glmnet(equity_x, equity_y, alpha = 0, lambda = 0.1)
+# print(coef(Equity_ridge))
+
+# ROA_x <- model.matrix(ROA ~ .-1, data = inst.training)
+# ROA_y <- inst.training$ROA
+# ROA_ridge <- glmnet(ROA_x, ROA_y, alpha = 0, lambda = 0.1)
+# print(coef(ROA_ridge))
+
+# ROE_x <- model.matrix(ROE ~ .-1, data = inst.training)
+# ROE_y <- inst.training$ROE
+# ROE_ridge <- glmnet(ROE_x, ROE_y, alpha = 0, lambda = 0.1)
+# print(coef(ROE_ridge))
+```
+
+# Fitting a model with KNN
+
+#### - Ordinal Encoding - BKCLASS variable
+
+-   Missing values check
+
+```{r}
+
+bkclass.levels <- unique(inst.training$BKCLASS)
+bkclass.map <- setNames(as.integer(bkclass.levels), bkclass.levels)
+inst.training$BKCLASS <- as.integer(bkclass.map[inst.training$BKCLASS])
+inst.testing$BKCLASS <- as.integer(bkclass.map[inst.testing$BKCLASS])
+
+inst.training[is.na(inst.training)] <- 0
+inst.testing[is.na(inst.testing)] <- 0
+```
+
+#### - Select Predictors
+
+```{r}
+# Select predictors and response variable for training set
+X.train <- inst.training[, c("BKCLASS", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.train <- inst.training$ASSET
+
+# Select predictors and response variable for testing set
+X.test <- inst.testing[, c("BKCLASS", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.test <- inst.testing$ASSET
+```
+
+#### - Fit the KNN Model
+
+-   had to convert y.test to numeric,
+
+-   calculated MSE
+
+```{r}
+library(class)
+library(caret)
+k <- 3
+asset.knn <- knn(train=X.train, test=X.test, cl=Y.train, k)
+
+Y.test <- as.numeric(as.character(Y.test))
+asset.knn <- as.numeric(as.character(asset.knn))
+
+
+mse <- mean((Y.test - asset.knn)^2)
+print(paste("Mean Squared Error (MSE):", mse))
+
+
+mae <- mean(abs(Y.test - asset.knn))
+print(paste("Mean Absolute Error (MAE):", mae))
+
+
+```
+
+## KNN Model 2 - BKCLASS
+
+```{r}
+# Define your mapping
+bkclass.map <- c(
+  "N" = 1,
+  "NM" = 2,
+  "OI" = 3,
+  "SB" = 4,
+  "SI" = 5,
+  "SL" = 6,
+  "SM" = 7,
+  "NC" = 8,
+  "NS" = 9,
+  "CU" = 10
+)
+
+# Ensure inst.training$BKCLASS is a factor or character vector
+# Convert to factor if necessary
+inst.training$BKCLASS <- as.factor(inst.training$BKCLASS)
+
+# Check for NA values before mapping
+if (any(is.na(inst.training$BKCLASS))) {
+  stop("NA values found in inst.training$BKCLASS. Please handle missing values first.")
+}
+
+# Map BKCLASS to integers based on bkclass.map
+inst.training$BKCLASS <- as.integer(bkclass.map[as.character(inst.training$BKCLASS)])
+
+# Print table to verify the result
+print(table(inst.training$BKCLASS))
+
+# Handle NA values by assigning 0
+inst.training[is.na(inst.training)] <- 0
+inst.testing[is.na(inst.testing)] <- 0
+
+```
+
+```{r}
+
+library(caret)
+library(class)
+
+inst.training <- na.omit(inst.training)
+inst.testing <- na.omit(inst.testing)
+
+
+X.train <- inst.training[, c("ASSET", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.train <- inst.training$BKCLASS
+
+
+X.test <- inst.testing[, c("ASSET", "DEP", "DEPDOM", "EQ", "NETINC", "ROAPTX", "ROAPTXQ", "ROAQ")]
+Y.test <- inst.testing$BKCLASS
+
+
+k <- 3
+bkclass.knn <- class::knn(train=X.train, test=X.test, cl=Y.train, k)
+
+
+table(Y.test, bkclass.knn)
+
+mean(Y.test == bkclass.knn)
+
+```
+
+Updated 6/20 to reflect comments from professor (made sure response variables are consistent and there are no unnecessary extra splits
