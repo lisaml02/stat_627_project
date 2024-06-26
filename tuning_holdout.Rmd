@@ -370,6 +370,8 @@ hist(predicted_means_all, main = "Distribution of Predicted Means", xlab = "Pred
 ```
 
 ```{r}
+boot_coefs <- boot_linear_results$t
+
 X_test <- model.matrix(ASSET ~ BKCLASS + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, data = inst.testing)
 
 predicted_values <- X_test %*% t(boot_coefs)
