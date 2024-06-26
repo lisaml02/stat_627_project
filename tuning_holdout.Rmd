@@ -1,0 +1,383 @@
+---
+title: "tuning_testing"
+output: html_document
+date: "2024-06-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loading in data and splitting}
+library(tidyverse)
+library(ggplot2)
+library(car)
+library(MASS)
+library(caret)
+library(dplyr)
+
+inst_clean <- read_csv("./inst_clean.csv") %>% 
+  dplyr::select(-TRUST, -MUTUAL, -ROE)
+
+set.seed(12345)  
+training_pct <- 0.8
+Z <- sample(nrow(inst_clean), floor(training_pct*nrow(inst_clean)))
+inst.training <- inst_clean[Z, ]
+inst.testing <- inst_clean[-Z, ]
+c(nrow(inst_clean), nrow(inst.training), nrow(inst.testing))
+```
+
+# Logistic Model
+
+## How it Was Fit
+
+Starting with recoding the variable BKCLASS to be binary.
+
+```{r recoding BKCLASS}
+commercial_bank_categories <- c("N", "NM", "SM", "NC")
+
+inst.training$CommercialBank <- ifelse(inst.training$BKCLASS %in% commercial_bank_categories, 1, 0)
+print(inst.training)
+```
+
+```{r recoding BKCLASS for test data}
+inst.testing$CommercialBank <- ifelse(inst.testing$BKCLASS %in% commercial_bank_categories, 1, 0)
+print(inst.testing)
+```
+
+Now we fit the Model
+
+```{r fitting the logistic model}
+# predicting whether or not the bank is a commericial bank or not
+
+logit_inst <- glm(CommercialBank ~ ASSET + DEP + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, data = inst.training, family = "binomial")
+summary(logit_inst)
+```
+
+Residual deviance: 17622
+
+## Tuning
+
+```{r standardizing features}
+
+# Exclude non-numeric columns and response variable from training set
+train_x <- inst.training[, sapply(inst.training, is.numeric) & names(inst.training) != "CommercialBank"]
+train_y <- inst.training$CommercialBank
+
+# Exclude non-numeric columns and response variable from testing set
+test_x <- inst.testing[, sapply(inst.testing, is.numeric) & names(inst.testing) != "CommercialBank"]
+test_y <- inst.testing$CommercialBank
+
+# Standardize features
+train_x_scaled <- scale(train_x)
+test_x_scaled <- scale(test_x, center = attr(train_x_scaled, "scaled:center"), scale = attr(train_x_scaled, "scaled:scale"))
+
+```
+
+```{r k-fold CV}
+# Fit LASSO model using cv.glmnet
+library(glmnet)
+
+# Example data preparation (replace with your actual data)
+x_train <- as.matrix(train_x_scaled)  # Assuming train_x_scaled is standardized numeric features
+y_train <- as.factor(train_y)  # Convert train_y to factor for binomial family
+
+# Fit LASSO model using cross-validation to select lambda
+cv_model <- cv.glmnet(x_train, y_train, family = "binomial", alpha = 1, nfolds = 5)
+best_lambda <- cv_model$lambda.min
+
+# Fit final LASSO model using the selected lambda
+lasso_model <- glmnet(x_train, y_train, family = "binomial", alpha = 1, lambda = best_lambda)
+
+# Extract coefficients from LASSO model
+lasso_coefficients <- coef(lasso_model, s = best_lambda)
+
+# Convert coefficients to a regular matrix
+lasso_coefficients_matrix <- as.matrix(lasso_coefficients)
+
+# Extract names of non-zero coefficients (selected features)
+selected_features <- rownames(lasso_coefficients_matrix)[lasso_coefficients_matrix != 0]
+print(selected_features)
+
+```
+
+Here is the model:
+
+```{r fitting selected logit model}
+final_logit <- glm(CommercialBank ~ ASSET + DEP + DEPDOM + NETINC + ROA + ROAPTX + ROAPTXQ, data = inst.training, family = "binomial")
+summary(final_logit)
+```
+
+Residual deviance: 17668
+
+## Assessing Model Performance
+
+```{r assessing model performance}
+# Predicted probabilities on training data
+train_pred_probs <- predict(final_logit, type = "response")
+
+# Predicted classes (binary) based on a threshold (typically 0.5)
+train_pred <- ifelse(train_pred_probs > 0.5, 1, 0)
+
+# Compute training error rate
+train_error_rate <- mean(train_pred != inst.training$CommercialBank)
+cat("Training Error Rate:", train_error_rate, "\n")
+
+# Compute residual deviance
+residual_deviance <- deviance(final_logit)
+cat("Residual Deviance:", residual_deviance, "\n")
+
+# Confusion Matrix
+train_conf_matrix <- table(Predicted = train_pred, Actual = inst.training$CommercialBank)
+cat("Confusion Matrix:\n")
+print(train_conf_matrix)
+
+# ROC Curve and AUC
+library(pROC)
+roc_obj <- roc(inst.training$CommercialBank, train_pred_probs)
+plot(roc_obj, main = "ROC Curve - Training Data")
+auc <- auc(roc_obj)
+cat("Training AUC:", auc, "\n")
+
+```
+
+# Linear Model with Bootstrap
+
+## How the Model Was Fit
+
+fitting a full model:
+
+```{r getting rid of outliers}
+inst.training$BKCLASS <- factor(inst.training$BKCLASS)
+# Fit the linear model to get residuals
+lm_model <- lm(ASSET ~ BKCLASS + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, data = inst.training)
+
+# Calculate residuals
+residuals <- residuals(lm_model)
+
+# Identify outliers based on residuals (e.g., top 1%)
+outlier_cutoff <- quantile(abs(residuals), probs = 0.99)
+
+# Find indices of outliers
+outlier_indices <- which(abs(residuals) > outlier_cutoff)
+
+# Examine how many outliers are identified
+print(length(outlier_indices))  # Number of outliers
+
+```
+
+```{r bootstrap}
+library(boot)
+assetslope.fn <- function(df, inds, outliers){
+  df <- df[-outliers, ]
+  lmout <- lm(ASSET ~ BKCLASS + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ , data=inst.training[inds, ])
+  return(lmout$coef)
+}
+boot_linear <- boot(inst.training, assetslope.fn, R=10000, outliers = outlier_indices)
+print(boot_linear)
+```
+
+```{r calculating summary statistics}
+# Calculate mean predicted values across all observations
+predicted_means_all <- apply(boot_linear$t, 1, mean)
+predicted_sds <- apply(boot_linear$t, 2, sd)
+
+# Optional: Plot distribution of predicted values
+hist(predicted_means_all, main = "Distribution of Predicted Means", xlab = "Predicted ASSET")
+```
+
+## Tuning
+
+```{r tuning the number of bootstrap samples}
+boot_linear_2 <- boot(inst.training, assetslope.fn, R=20000, outliers = outlier_indices)
+print(boot_linear_2)
+```
+
+```{r}
+# Calculate mean predicted values across all observations
+predicted_means_all <- apply(boot_linear_2$t, 1, mean)
+predicted_sds <- apply(boot_linear_2$t, 2, sd)
+
+# Optional: Plot distribution of predicted values
+hist(predicted_means_all, main = "Distribution of Predicted Means", xlab = "Predicted ASSET")
+```
+
+## Assessing Model Accuracy
+
+```{r}
+library(boot)
+boot_coefficients <- boot_linear$t
+boot_coefficients_2 <- boot_linear_2$t
+
+X <- model.matrix(ASSET ~ BKCLASS + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, data = inst.training)
+
+predicted_values <- X %*% t(boot_coefficients)
+predicted_values_2 <- X %*% t(boot_coefficients_2)
+
+mse_boot_linear <- apply(predicted_values, 2, function(pred) mean((inst.training$ASSET - pred)^2))
+
+mse_boot_linear_2 <- apply(predicted_values_2, 2, function(pred) mean((inst.training$ASSET - pred)^2))
+
+mean_mse_boot_linear <- mean(mse_boot_linear)
+mean_mse_boot_linear2 <- mean(mse_boot_linear_2)
+
+print(mean_mse_boot_linear)
+print(mean_mse_boot_linear2)
+
+rmse_bl1<- sqrt(mean_mse_boot_linear)
+rmse_bl2 <- sqrt(mean_mse_boot_linear2)
+print(rmse_bl1)
+print(rmse_bl2)
+```
+
+```{r}
+lm_full <- lm(ASSET ~ BKCLASS + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ , data=inst.training)
+summary(lm_full)
+```
+
+```{r}
+
+
+```
+
+# Applying to Holdout Data
+
+## Logistic Regression
+
+```{r fitting logistic model using testing data}
+final_logit_test <- glm(CommercialBank ~ ASSET + DEP + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ, data = inst.testing, family = "binomial")
+summary(final_logit_test)
+```
+
+Residual deviance: 3361.2
+
+```{r logistic test performance measures}
+library(glmnet)  # for glmnet models
+library(pROC)    
+predicted_probs <- predict(final_logit_test, newdata = inst.testing, type = "response")
+
+
+# Compute Residual Deviance
+residual_deviance <- with(inst.testing, -2 * sum(log(predict(final_logit_test, type = "response", newdata = inst.testing)) * CommercialBank + log(1 - predict(final_logit_test, type = "response", newdata = inst.testing)) * (1 - CommercialBank)))
+print(paste("Residual Deviance on testing data:", residual_deviance))
+
+
+predicted_classes <- ifelse(predicted_probs > 0.5, 1, 0)  # Threshold of 0.5 for binary classification
+conf_matrix <- table(Actual = inst.testing$CommercialBank, Predicted = predicted_classes)
+print("Confusion Matrix:")
+print(conf_matrix)
+
+error_rate <- mean(inst.testing$CommercialBank != predicted_classes)
+print(paste("Prediction Error Rate on testing data:", error_rate))
+
+# Calculate ROC curve and AUC
+roc_curve <- roc(inst.testing$CommercialBank, predicted_probs)
+auc <- auc(roc_curve)
+
+# Plot ROC curve
+plot(roc_curve, main = "ROC Curve")
+legend("bottomright", legend = paste("AUC =", round(auc, 6)), col = "black", lty = 1)
+
+```
+
+## Linear Regression with Bootstrap
+
+```{r}
+library(boot)
+library(parallel)
+
+# Define your assetslope function
+assetslope.fn <- function(df, inds, outliers) {
+  df <- df[-outliers, ]
+  lmout <- lm(ASSET ~ BKCLASS + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ , data = df[inds, ])
+  return(coef(lmout))
+}
+
+# Function to run bootstrapping in batches
+run_bootstrap_batches <- function(data, boot_fn, R_total, batch_size, outliers) {
+  num_batches <- ceiling(R_total / batch_size)
+  results <- NULL
+  for (batch in 1:num_batches) {
+    cat("Running batch ", batch, " of ", num_batches, "\n")
+    batch_R <- ifelse(batch == num_batches, R_total - (batch - 1) * batch_size, batch_size)
+    batch_result <- tryCatch({
+      boot(data, boot_fn, R = batch_R, outliers = outliers, parallel = "multicore", ncpus = detectCores() - 1)
+    }, error = function(e) {
+      cat("Error during batch ", batch, ": ", e$message, "\n")
+      return(NULL)
+    })
+    
+    if (!is.null(batch_result)) {
+      if (is.null(results)) {
+        results <- batch_result
+      } else {
+        # Merge the results in the format similar to boot_linear_test
+        results$t <- rbind(results$t, batch_result$t)
+        results$R <- sum(results$R, batch_result$R)
+      }
+    }
+    gc()  # Garbage collection to free up memory
+  }
+  return(results)
+}
+
+# Example usage: Identify outliers
+lm_model <- lm(ASSET ~ BKCLASS + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, data = inst.testing)
+residuals <- residuals(lm_model)
+outlier_cutoff <- quantile(abs(residuals), probs = 0.99)
+outlier_indices <- which(abs(residuals) > outlier_cutoff)
+cat("Outliers identified: ", length(outlier_indices), "\n\n")
+
+# Set total R value and batch size
+R_total <- 10000
+batch_size <- 2000
+
+# Example usage: run bootstrapping in batches
+boot_linear_results <- run_bootstrap_batches(inst.training, assetslope.fn, R_total, batch_size, outlier_indices)
+
+# Print the combined results in the desired format
+if (!is.null(boot_linear_results)) {
+  cat("\nORDINARY NONPARAMETRIC BOOTSTRAP\n\n")
+  cat("Call:\n")
+  cat(sprintf("boot(data = inst.training, statistic = assetslope.fn, R = %d, outliers = outlier_indices)\n\n", R_total))
+  
+  cat("Bootstrap Statistics :\n")
+  # Loop through each statistic and print in the desired format
+  for (i in seq_len(ncol(boot_linear_results$t))) {
+    cat(sprintf("%s*  %.6e  %.6e  %.6e\n", colnames(boot_linear_results$t)[i], 
+                boot_linear_results$t[1, i], 
+                mean(boot_linear_results$t[, i] - boot_linear_results$t[1, i]), 
+                sd(boot_linear_results$t[, i])))
+  }
+} else {
+  cat("Bootstrapping failed.\n")
+}
+
+```
+
+```{r}
+print(boot_linear_results)
+```
+
+```{r}
+# Calculate mean predicted values across all observations
+predicted_means_all <- apply(boot_linear_results$t, 1, mean)
+predicted_sds <- apply(boot_linear_results$t, 2, sd)
+
+# Optional: Plot distribution of predicted values
+hist(predicted_means_all, main = "Distribution of Predicted Means", xlab = "Predicted ASSET")
+
+```
+
+```{r}
+X_test <- model.matrix(ASSET ~ BKCLASS + DEPDOM + EQ + NETINC + ROA + ROAPTX + ROAPTXQ + ROAQ, data = inst.testing)
+
+predicted_values <- X_test %*% t(boot_coefs)
+mse_boot_linear_test <- apply(predicted_values, 2, function(pred) mean((inst.testing$ASSET - pred)^2))
+
+mean_mse_boot_linear_test <- mean(mse_boot_linear_test)
+print(mean_mse_boot_linear_test)
+
+rmse_test<- sqrt(mean_mse_boot_linear_test)
+print(rmse_test)
+```
